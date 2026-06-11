@@ -36,3 +36,4 @@ build_upload_image.py
 pom.xml
 installation-guide.md
 installation-guide.html
+context.md
