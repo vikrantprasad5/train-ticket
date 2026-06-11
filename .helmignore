@@ -3,6 +3,10 @@
 .gitignore
 .helmignore
 
+.vscode/
+.idea/
+.claude/
+
 *.swp
 *.tmp
 *.bak
@@ -16,6 +20,8 @@ old-docs/
 hack/
 jenkins-ci/
 image/
+images/
+tests/
 script/
 deploy-job/
 
@@ -28,3 +34,5 @@ CHANGELOG*.md
 build_upload_image.py
 .env
 pom.xml
+pre-setup.md
+pre-setup.html
