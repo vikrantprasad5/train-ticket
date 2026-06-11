@@ -34,5 +34,5 @@ CHANGELOG*.md
 build_upload_image.py
 .env
 pom.xml
-pre-setup.md
-pre-setup.html
+installation-guide.md
+installation-guide.html
