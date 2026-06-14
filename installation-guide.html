@@ -397,6 +397,10 @@ config object — never on the loaded one.
 
 ## Part 8 — Day-2 operations
 
+- **One-command restart:** `./start-train-ticket.sh` (repo root) automates this
+  whole section — minikube start, CPU cap, park, 6-batch wave-boot, the
+  consign-price workaround, and a final health verdict. Idempotent: safe to run
+  when already healthy. The notes below explain what it does and why.
 - **Stop / start are safe.** `minikube stop` then `minikube start` — desired
   state, database volumes, and all the Part 4 hardening patches live in the
   cluster and survive. Never re-run `helm install` on an existing cluster. Only
@@ -449,6 +453,135 @@ config object — never on the loaded one.
   `docker inspect minikube --format '{{.HostConfig.NanoCpus}}'` — `0` means
   uncapped). Apply `docker update --cpus=$(( $(nproc) - 4 )) minikube`. In a true
   emergency: `minikube stop` is always safe and always recovers.
+
+---
+
+## Part 10 — Full Teardown
+
+Two scenarios: a soft stop that preserves everything (use this for day-to-day), and
+a nuclear reset that destroys the cluster entirely and lets you start clean.
+
+### Scenario A — Soft stop (fastest, fully reversible)
+
+Park the services first. Bringing 46 JVMs down cleanly prevents the kernel OOM
+killer from randomly shooting pods mid-shutdown, which can corrupt RabbitMQ queues
+and Nacos lease state:
+
+```bash
+kubectl get deploy -n train-ticket -o name | grep "/ts-" | xargs -I{} kubectl scale {} --replicas=0 -n train-ticket
+```
+
+Wait for service pods to exit (infrastructure — mysql, nacos, rabbitmq — stays up):
+
+```bash
+kubectl wait --for=delete pods -n train-ticket -l app --timeout=4m 2>/dev/null; echo "done"
+```
+
+Then stop minikube:
+
+```bash
+minikube stop
+```
+
+Everything is preserved: desired-state manifests, database volumes (PVCs), and all
+the Part 4 hardening patches. On next start:
+
+```bash
+minikube start
+docker update --cpus=$(( $(nproc) - 4 )) minikube   # re-apply CPU cap (survives stop/start, double-check anyway)
+```
+
+Then skip straight to Part 5 (wave-boot) — the patches are already in place.
+
+---
+
+### Scenario B — Nuclear reset (clean slate)
+
+Use this when the cluster is unrecoverably broken, PVC data is stale/corrupted,
+or you want to start fresh. **This destroys all data.** Everything from Parts 2–7
+must be redone.
+
+**Step 1 — Stop any observer tools** (k8viewer server, kubectl proxy):
+
+```bash
+pkill -f "kubectl proxy" 2>/dev/null; pkill -f "node server.js" 2>/dev/null; pkill -f "node index.js" 2>/dev/null; echo "observers stopped"
+```
+
+**Step 2 — Delete the cluster** (deletes the Docker container, all volumes, all
+Kubernetes state — everything minikube owns):
+
+```bash
+minikube delete
+```
+
+Confirm it's gone:
+
+```bash
+docker ps -a | grep minikube   # should return nothing
+```
+
+**Step 3 — Optional: prune leftover Docker images** (frees ~10 GB but forces a
+full re-download on next deploy — skip unless you're reclaiming disk):
+
+```bash
+docker system prune --volumes -f
+```
+
+> **Do not** run `docker system prune` if you have other containers/images on the
+> machine you care about — it removes all stopped containers and dangling images
+> system-wide. Scope it with `docker image prune` instead if unsure.
+
+**Step 4 — Recreate and reinstall from scratch:**
+
+Follow Parts 2 → 3 → 4 → 5 → 6 → 7 in order:
+
+```bash
+# Part 2 — new cluster
+CPUS=$(( $(nproc) - 4 ))
+minikube start --driver=docker --cpus=$CPUS --memory=20g
+docker update --cpus=$CPUS minikube
+
+# Part 3 — install chart (uses your existing clone)
+cd ~/work/train-ticket
+helm install train-ticket . --namespace train-ticket --create-namespace
+kubectl wait --for=condition=complete -n train-ticket job/train-ticket-deploy --timeout=40m
+kubectl get pods -n train-ticket | grep -E "mysql|nacos|rabbitmq"
+```
+
+Then Parts 4a → 4b → 4c (harden), then Part 5 (wave-boot), then Part 7
+(consign-price fix). The timings reset to "fresh cluster" values — budget
+~1–2 h wall-clock for the first deploy due to image downloads.
+
+---
+
+### Right now — stopping a stuck cold-start storm
+
+If you're seeing a sea of `CrashLoopBackOff` / `Error` after a plain
+`minikube start` (without wave-boot), you are in the 20–30 minute self-healing
+storm described in Part 8. You have two options:
+
+**Option 1 — Wait it out.** It resolves on its own. Use `watch` to monitor:
+
+```bash
+watch -n 5 "kubectl get pods -n train-ticket --no-headers | awk '{print \$2, \$3}' | sort | uniq -c"
+```
+
+Target: `1 × 0/1 Completed`, `51 × 1/1 Running`, `6 × 3/3 Running`. Once nacos
+reaches `3/3 Running` the rest accelerates quickly.
+
+**Option 2 — Abort cleanly and wave-boot properly.** Fastest path to a stable
+cluster:
+
+```bash
+# Park everything so nothing is crashing
+kubectl get deploy -n train-ticket -o name | grep "/ts-" | xargs -I{} kubectl scale {} --replicas=0 -n train-ticket
+# Wait for the storm to subside
+kubectl wait --for=condition=available -n train-ticket statefulset/nacos --timeout=10m
+# Now wave-boot in order (Part 5)
+```
+
+Then run Part 5 batches. This takes ~15 min versus waiting ~30 min for the storm
+to self-heal.
 
 ---
 

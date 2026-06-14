@@ -338,6 +338,10 @@ config object — never on the loaded one.
 
 ## Part 8 — Day-2 operations
 
+- **One-command restart:** `./start-train-ticket.sh` (repo root) automates this
+  whole section — minikube start, CPU cap, park, 6-batch wave-boot, the
+  consign-price workaround, and a final health verdict. Idempotent: safe to run
+  when already healthy. The notes below explain what it does and why.
 - **Stop / start are safe.** `minikube stop` then `minikube start` — desired
   state, database volumes, and all the Part 4 hardening patches live in the
   cluster and survive. Never re-run `helm install` on an existing cluster. Only
